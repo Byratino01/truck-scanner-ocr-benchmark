@@ -12,6 +12,7 @@ on:
       - '.github/workflows/v9-diagnostics-validation.yml'
       - 'ios-experiment/aggregate-vision-benchmark.swift'
       - 'ios-experiment/run-private-vision-orientation.sh'
+      - 'benchmark/test_aggregate_output.py'
 
 permissions:
   contents: read
@@ -43,3 +44,9 @@ jobs:
           mkdir -p "$d"
           cp ios-experiment/aggregate-vision-benchmark.swift "$d/main.swift"
           swiftc -typecheck ios-experiment/BOLAddressParserV8.swift ios-experiment/BOLParserV9.swift "$d/main.swift"
+
+      - name: Fixture-free aggregate output privacy regressions
+        run: |
+          set -euo pipefail
+          python3 -m unittest benchmark/test_aggregate_output.py -v
+          bash -n ios-experiment/run-private-vision-orientation.sh

@@ -119,6 +119,26 @@ def candidate_context(lines, options, limit=16):
         if len(chosen) >= limit: break
     return [{'line': i+1, 'text': texts[i][:160]} for i in sorted(chosen)[:limit]]
 
+def generation_diagnostics(output_ids, input_ids, answer, processor):
+    """Only non-reversible counts/categories; never expose model content."""
+    tokens = output_ids[0].tolist()
+    prompt_tokens = input_ids[0].tolist()
+    prefix = tokens[:len(prompt_tokens)] == prompt_tokens
+    generated = tokens[len(prompt_tokens):] if prefix else tokens
+    eos = getattr(processor.tokenizer, 'eos_token_id', None)
+    pad = getattr(processor.tokenizer, 'pad_token_id', None)
+    # Do not print token IDs, decoded text, hashes, or candidate identifiers.
+    return {
+        'output_includes_prompt': int(prefix),
+        'generated_tokens': len(generated),
+        'decoded_chars': len(answer),
+        'empty_output': int(not answer.strip()),
+        'eos_seen': int(eos is not None and eos in generated),
+        'pad_seen': int(pad is not None and pad in generated),
+        'max_tokens_hit': int(len(generated) >= 100 and (eos is None or eos not in generated)),
+    }
+
+
 def merge_roles(baseline, vlm):
     """Retain a baseline on abstention, fill missing roles, withhold conflicts."""
     assisted = {}
@@ -190,6 +210,9 @@ def main():
                 with torch.inference_mode():
                     output = model.generate(**inputs, max_new_tokens=100, do_sample=False)
                 answer = processor.decode(output[0, inputs['input_ids'].shape[-1]:], skip_special_tokens=True)
+                generation = generation_diagnostics(output, inputs['input_ids'], answer, processor)
+                print(doc + ': SAFE_GENERATION_DIAGNOSTICS ' +
+                      ' '.join(key + '=' + str(value) for key, value in generation.items()))
                 selected, category = parse_role_response(answer, options)
         vlm = {role: options.get(selected[role]) for role in ('pickup', 'delivery')}
         # Assisted hybrid: prefer a non-conflicting V9 result; take VLM result only when

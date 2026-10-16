@@ -72,6 +72,25 @@ func runSyntheticTests() {
     }
     check(BOLParserV9.rotationDisagreementKind(trials, role: 0) == "city-only", "rotation disagreement category")
     check(BOLParserV9.consolidateRotations(trials).pickup == nil, "conflicting rotations remain unresolved")
+
+    // Synthetic-only ZIP5 and role-heading safety checks. No real document values.
+    check(BOLParserV9.location("EXAMPLE CITY, CO 12345-6789")?.zip == "12345",
+          "ZIP+4 must normalize to five digits")
+    check(BOLParserV9.location("EXAMPLE CITY, CO 12345")?.zip == "12345",
+          "ZIP5 must remain unchanged")
+    check(BOLParserV9.location("EXAMPLE CITY, XX 12345") == nil,
+          "unknown state code must be rejected")
+    check(BOLParserV9.location("EXAMPLE CITY, CO 1234") == nil,
+          "short ZIP must be rejected")
+    check(BOLParserV9.isRoleHeading("SHIPPER", role: 0),
+          "shipper maps to pickup")
+    check(BOLParserV9.isRoleHeading("CONSIGNEE", role: 1),
+          "consignee maps to delivery")
+    check(!BOLParserV9.isRoleHeading("BILL TO", role: 0),
+          "billing heading cannot become pickup")
+    check(!BOLParserV9.isRoleHeading("BILL TO", role: 1),
+          "billing heading cannot become delivery")
+
     print("BOLParserV9 synthetic diagnostics: passed")
 }
 

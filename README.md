@@ -1,6 +1,6 @@
 # Truck Scanner OCR Benchmark
 
-Isolated public code for comparing Apple Vision V9 (with V8 fallback), SmolVLM-256M-Instruct, and an agreement-only hybrid on three private BOLs. This repository contains no BOL images, ground truth, predictions, decrypted data, or production app code.
+Isolated public code for comparing Apple Vision V9 (with V8 fallback), OCR-assisted SmolVLM-256M-Instruct candidate selection, and an assisted hybrid on three private BOLs. This repository contains no BOL images, ground truth, predictions, decrypted data, or production app code.
 
 ## Private setup
 
@@ -12,7 +12,13 @@ Set these **Actions repository secrets** in this new repository only:
 
 The SHA-256 values must be independently verified against the original ZIP ordering. The workflow refuses to score a mismatched fixture. Never paste the secret values into an issue, chat, workflow input, or commit. If the ground truth or fingerprints have not been independently verified, stop and verify them privately first.
 
-Run **Private three-BOL OCR comparison** manually after the repository has been audited and secrets are installed. The job uses the standard `macos-15` runner and prints only aggregate counts out of six pickup/delivery roles. There are no workflow artifacts or uploaded predictions. The hybrid emits an address only when Apple Vision and SmolVLM agree exactly.
+Run **Private three-BOL OCR comparison** manually after the repository has been audited and secrets are installed. The job uses the standard `macos-15` runner and prints only aggregate counts out of six pickup/delivery roles. There are no workflow artifacts or uploaded predictions.
+
+Apple Vision writes its baseline plus OCR lines and the selected orientation to temporary JSON with owner-only access. SmolVLM receives the correspondingly rotated image and OCR evidence, and can return only candidate IDs from recognized locations. The `smolvlm` score now means **OCR-assisted candidate selection**, not independent visual transcription; it cannot be compared directly with the previous independent SmolVLM score. The original independent extraction script remains available in source but is not invoked by the workflow.
+
+The hybrid retains the Apple Vision baseline when SmolVLM abstains, fills a missing baseline from a selected OCR candidate, and withholds disagreements. Baseline retention does not imply model agreement or verification. Use withheld documents to assess generalization after tuning on these three BOLs.
+
+Run the synthetic selection and merge checks locally with `python3 -m unittest discover -s benchmark -p 'test_*.py'`. These tests require no model weights, private documents, or secrets.
 
 ## Security boundaries
 

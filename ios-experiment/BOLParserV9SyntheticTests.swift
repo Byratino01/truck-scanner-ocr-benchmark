@@ -91,6 +91,47 @@ func runSyntheticTests() {
     check(!BOLParserV9.isRoleHeading("BILL TO", role: 1),
           "billing heading cannot become delivery")
 
+
+    // Independent synthetic geometry and rotation diagnostics, with no private fixtures.
+    let alignedColumns = BOLParserV9.parse(sideBySide)
+    check(alignedColumns.pickup?.city == "TESTVILLE",
+          "aligned shipper column retains pickup city")
+    check(alignedColumns.delivery?.city == "SAMPLE CITY",
+          "aligned consignee column retains delivery city")
+
+    let splitOnly = BOLParserV9.parse(split)
+    check(splitOnly.delivery == nil,
+          "split pickup fragments must not invent a delivery")
+    check(["none", "layout", "split-region", "region", "v8-fallback"]
+          .contains(splitSummary.pickupOrigin),
+          "split-fragment diagnostics use a fixed origin category")
+
+    let ambiguousHeading = OCRDocument(file: "synthetic-ambiguous-heading", lines: [
+        line("SHIPPER / CONSIGNEE", 0.30, 0.90),
+        line("EXAMPLE CITY, CO 12345", 0.30, 0.82)
+    ])
+    let ambiguousResult = BOLParserV9.parse(ambiguousHeading)
+    check(ambiguousResult.pickup == nil && ambiguousResult.delivery == nil,
+          "combined opposing role heading must not imply ownership")
+    check(!BOLParserV9.isRoleHeading("SHIPPER / CONSIGNEE", role: 0),
+          "mixed role heading rejected for pickup")
+    check(!BOLParserV9.isRoleHeading("SHIPPER / CONSIGNEE", role: 1),
+          "mixed role heading rejected for delivery")
+
+    let distinctZipDocuments: [BOLParserV9.RotationParse] = [0, 90, 180, 270].map { degree in
+        let zip = degree == 180 ? "12346" : "12345"
+        let candidate = BOLParserV9.Location(city: "EXAMPLE CITY", state: "CO", zip: zip)
+        return BOLParserV9.RotationParse(
+            degrees: degree,
+            document: BOLParserV9.ParsedDocument(
+                file: "synthetic-zip-conflict", pickup: candidate, delivery: nil,
+                pickupStatus: "review", deliveryStatus: "review-required", warnings: []))
+    }
+    check(BOLParserV9.rotationDisagreementKind(distinctZipDocuments, role: 0) == "zip-only",
+          "cross-rotation conflicting ZIP categorized")
+    check(BOLParserV9.consolidateRotations(distinctZipDocuments).pickup == nil,
+          "ZIP conflicts cannot be accepted by majority vote")
+
     print("BOLParserV9 synthetic diagnostics: passed")
 }
 

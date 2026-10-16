@@ -13,6 +13,7 @@ on:
       - 'ios-experiment/aggregate-vision-benchmark.swift'
       - 'ios-experiment/run-private-vision-orientation.sh'
       - 'benchmark/test_aggregate_output.py'
+      - 'benchmark/test_public_workflow_security.py'
 
 permissions:
   contents: read
@@ -50,3 +51,8 @@ jobs:
           set -euo pipefail
           python3 -m unittest benchmark/test_aggregate_output.py -v
           bash -n ios-experiment/run-private-vision-orientation.sh
+
+      - name: Fixture-free workflow security regressions
+        run: |
+          set -euo pipefail
+          python3 -m unittest benchmark/test_public_workflow_security.py -v

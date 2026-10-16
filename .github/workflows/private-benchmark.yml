@@ -27,7 +27,8 @@ jobs:
           BOL_VISION_AES_KEY: ${{ secrets.BOL_VISION_AES_KEY }}
           BOL_ENCRYPTED_FIXTURE_URL: ${{ secrets.BOL_ENCRYPTED_FIXTURE_URL }}
           BOL_3_GROUND_TRUTH_JSON: ${{ secrets.BOL_3_GROUND_TRUTH_JSON }}
-        run: "$RUNNER_TEMP/bol-venv/bin/python" benchmark/prepare.py
+        run: |
+          "$RUNNER_TEMP/bol-venv/bin/python" benchmark/prepare.py
       - name: Apple Vision V9 with V8 fallback
         run: |
           cp benchmark/private-three-bol-vision.swift "$RUNNER_TEMP/main.swift"

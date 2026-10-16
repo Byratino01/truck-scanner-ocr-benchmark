@@ -11,6 +11,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Test candidate selection with synthetic data
+        run: python3 -m unittest discover -s benchmark -p 'test_*.py'
       - name: Check required secrets
         env:
           BOL_VISION_AES_KEY: ${{ secrets.BOL_VISION_AES_KEY }}
@@ -31,15 +33,16 @@ jobs:
           "$RUNNER_TEMP/bol-venv/bin/python" benchmark/prepare.py
       - name: Apple Vision V9 with V8 fallback
         run: |
+          umask 077
           cp benchmark/private-three-bol-vision.swift "$RUNNER_TEMP/main.swift"
           swiftc -o "$RUNNER_TEMP/vision-compare" "$RUNNER_TEMP/main.swift" benchmark/BOLAddressParserV8.swift benchmark/BOLParserV9.swift
           "$RUNNER_TEMP/vision-compare" "$RUNNER_TEMP/bol-private" "$RUNNER_TEMP/vision-predictions.json"
-      - name: SmolVLM and agreement-only hybrid
+      - name: OCR-assisted SmolVLM selection and hybrid
         env:
           HF_HUB_DISABLE_TELEMETRY: "1"
           TOKENIZERS_PARALLELISM: "false"
         run: |
-          "$RUNNER_TEMP/bol-venv/bin/python" benchmark/run-private-three-bol-comparison.py "$RUNNER_TEMP/bol-private" "$RUNNER_TEMP/vision-predictions.json" "$RUNNER_TEMP/predictions.json"
+          "$RUNNER_TEMP/bol-venv/bin/python" benchmark/run-vision-smolvlm-assisted.py "$RUNNER_TEMP/bol-private" "$RUNNER_TEMP/vision-predictions.json" "$RUNNER_TEMP/predictions.json"
       - name: Print aggregate accuracy only
         env:
           BOL_3_GROUND_TRUTH_JSON: ${{ secrets.BOL_3_GROUND_TRUTH_JSON }}

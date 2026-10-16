@@ -78,7 +78,7 @@ def main():
     if set(vision) != set(score.IDS):
         raise ValueError('Unexpected document IDs')
 
-    model_id = 'HuggingFaceTB/SmolVLM-256M-Instruct'
+    model_id = 'HuggingFaceTB/SmolVLM-500M-Instruct'
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=False)
     model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, trust_remote_code=False).eval()
     results = {}

@@ -10,6 +10,8 @@ on:
       - 'ios-experiment/BOLParserV9.swift'
       - 'ios-experiment/BOLParserV9SyntheticTests.swift'
       - '.github/workflows/v9-diagnostics-validation.yml'
+      - 'ios-experiment/aggregate-vision-benchmark.swift'
+      - 'ios-experiment/run-private-vision-orientation.sh'
 
 permissions:
   contents: read
@@ -33,3 +35,11 @@ jobs:
           exe="$RUNNER_TEMP/bol-v9-synthetic-tests"
           swiftc -O -o "$exe" ios-experiment/BOLAddressParserV8.swift ios-experiment/BOLParserV9.swift "$d/main.swift"
           "$exe"
+
+      - name: Typecheck aggregate-only macOS benchmark (no private fixture)
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/v9-aggregate-typecheck"
+          mkdir -p "$d"
+          cp ios-experiment/aggregate-vision-benchmark.swift "$d/main.swift"
+          swiftc -typecheck ios-experiment/BOLAddressParserV8.swift ios-experiment/BOLParserV9.swift "$d/main.swift"

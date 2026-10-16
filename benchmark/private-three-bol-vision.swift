@@ -18,7 +18,8 @@ struct Roles: Encodable {
         else { try container.encodeNil(forKey: .delivery) }
     }
 }
-struct Prediction: Encodable { let apple_vision: Roles }
+struct Evidence: Encodable { let text: String; let x: Double; let y: Double }
+struct Prediction: Encodable { let apple_vision: Roles; let ocr_lines: [Evidence]; let ocr_rotation_degrees: Int }
 var result: [String:Prediction] = [:]
 for name in names {
     let files = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
@@ -27,6 +28,9 @@ for name in names {
           let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
           let cg = bitmap.cgImage else { fatalError("Invalid private image") }
     var rotations: [BOLParserV9.RotationParse] = []
+    var bestEvidence: [Evidence] = []
+    var bestQuality = -1.0
+    var bestDegrees = 0
     for (degrees, orientation) in [(0,CGImagePropertyOrientation.up),(90,.right),(180,.down),(270,.left)] {
         let rotated = CIImage(cgImage:cg).oriented(forExifOrientation:Int32(orientation.rawValue))
         guard let pixels = CIContext(options:[.useSoftwareRenderer:true]).createCGImage(rotated,from:rotated.extent.integral) else { fatalError("Image rotation failed") }
@@ -38,6 +42,13 @@ for name in names {
             guard let candidate = item.topCandidates(1).first else { return nil }
             return OCRLine(text:candidate.string,confidence:Double(candidate.confidence),x:Double(item.boundingBox.minX),y:Double(item.boundingBox.minY))
         }
+        let quality = lines.reduce(0.0) { $0 + $1.confidence * Double(max(1, $1.text.count)) }
+        if quality > bestQuality {
+            bestQuality = quality
+            bestDegrees = degrees
+            bestEvidence = lines.map { Evidence(text: $0.text, x: $0.x, y: $0.y) }
+                .sorted { $0.y == $1.y ? $0.x < $1.x : $0.y > $1.y }
+        }
         rotations.append(BOLParserV9.RotationParse(degrees:degrees,document:BOLParserV9.parse(OCRDocument(file:name,lines:lines))))
     }
     let merged = BOLParserV9.consolidateRotations(rotations)
@@ -45,7 +56,7 @@ for name in names {
         guard let v else { return nil }
         return Address(city:v.city,state:v.state,zip:v.zip)
     }
-    result[name] = Prediction(apple_vision:Roles(pickup:convert(merged.pickup),delivery:convert(merged.delivery)))
+    result[name] = Prediction(apple_vision:Roles(pickup:convert(merged.pickup),delivery:convert(merged.delivery)), ocr_lines:bestEvidence, ocr_rotation_degrees:bestDegrees)
 }
 try JSONEncoder().encode(result).write(to:output,options:.atomic)
 print("APPLE_VISION_PRIVATE_PREDICTIONS: 3/3 documents; values suppressed")

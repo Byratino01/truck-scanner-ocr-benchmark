@@ -1,0 +1,68 @@
+name: Public Apple Vision V9 synthetic validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/apple-vision-v9-private-fixture
+    paths:
+      - 'ios-experiment/BOLAddressParserV8.swift'
+      - 'ios-experiment/BOLParserV9.swift'
+      - 'ios-experiment/BOLParserV9SyntheticTests.swift'
+      - 'ios-experiment/vision-orientation-private-benchmark.swift'
+      - 'ios-experiment/run-private-vision-orientation.sh'
+      - '.github/workflows/v9-diagnostics-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Check out public sanitized source
+        uses: actions/checkout@v4
+
+      - name: Typecheck parser and private benchmark source
+        run: |
+          set -euo pipefail
+          benchmark_main="$RUNNER_TEMP/v9-benchmark-main"
+          mkdir -p "$benchmark_main"
+          cp ios-experiment/vision-orientation-private-benchmark.swift "$benchmark_main/main.swift"
+          python3 - "$benchmark_main/main.swift" <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          fields = [
+              '    var pickupOrigin = "none"',
+              '    var deliveryOrigin = "none"',
+              '    var pickupHeadingOwnedLines = 0',
+              '    var deliveryHeadingOwnedLines = 0',
+              '    var conflictingAddressFields = 0',
+              '    var ambiguousColumnBoundaries = 0',
+          ]
+          for field in fields:
+              text = text.replace(field + "\n", "")
+          anchor = '    let completeLocationOutsideRegions: Int\n'
+          text = text.replace(anchor, anchor + "\n".join(fields) + "\n")
+          path.write_text(text)
+          PY
+          swiftc -typecheck \
+            ios-experiment/BOLAddressParserV8.swift \
+            ios-experiment/BOLParserV9.swift \
+            "$benchmark_main/main.swift"
+
+      - name: Compile and run synthetic V9 regressions
+        run: |
+          set -euo pipefail
+          synthetic_main="$RUNNER_TEMP/v9-synthetic-main"
+          mkdir -p "$synthetic_main"
+          cp ios-experiment/BOLParserV9SyntheticTests.swift "$synthetic_main/main.swift"
+          exe="$RUNNER_TEMP/bol-v9-synthetic-tests"
+          swiftc -O -o "$exe" \
+            ios-experiment/BOLAddressParserV8.swift \
+            ios-experiment/BOLParserV9.swift \
+            "$synthetic_main/main.swift"
+          "$exe"

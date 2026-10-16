@@ -1,0 +1,9 @@
+*
+!.gitignore
+!README.md
+!benchmark/
+!benchmark/*.py
+!benchmark/*.swift
+!.github/
+!.github/workflows/
+!.github/workflows/private-benchmark.yml

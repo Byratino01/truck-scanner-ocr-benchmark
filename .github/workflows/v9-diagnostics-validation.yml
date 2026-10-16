@@ -1,0 +1,35 @@
+name: Apple Vision V9 public validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/apple-vision-v9-private-fixture
+    paths:
+      - 'ios-experiment/BOLAddressParserV8.swift'
+      - 'ios-experiment/BOLParserV9.swift'
+      - 'ios-experiment/BOLParserV9SyntheticTests.swift'
+      - '.github/workflows/v9-diagnostics-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Typecheck V8 and V9 parsers
+        run: |
+          set -euo pipefail
+          swiftc -typecheck ios-experiment/BOLAddressParserV8.swift ios-experiment/BOLParserV9.swift
+      - name: Compile and run synthetic V9 regressions
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/v9-synthetic-main"
+          mkdir -p "$d"
+          cp ios-experiment/BOLParserV9SyntheticTests.swift "$d/main.swift"
+          exe="$RUNNER_TEMP/bol-v9-synthetic-tests"
+          swiftc -O -o "$exe" ios-experiment/BOLAddressParserV8.swift ios-experiment/BOLParserV9.swift "$d/main.swift"
+          "$exe"

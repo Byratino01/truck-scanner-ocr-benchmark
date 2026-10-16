@@ -1,0 +1,52 @@
+name: Private three-BOL OCR comparison
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: macos-15
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check required secrets
+        env:
+          BOL_VISION_AES_KEY: ${{ secrets.BOL_VISION_AES_KEY }}
+          BOL_ENCRYPTED_FIXTURE_URL: ${{ secrets.BOL_ENCRYPTED_FIXTURE_URL }}
+          BOL_3_GROUND_TRUTH_JSON: ${{ secrets.BOL_3_GROUND_TRUTH_JSON }}
+        run: |
+          test -n "$BOL_VISION_AES_KEY" && test -n "$BOL_ENCRYPTED_FIXTURE_URL" && test -n "$BOL_3_GROUND_TRUTH_JSON" || { echo 'Required private benchmark secrets are missing'; exit 1; }
+      - name: Install isolated dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/bol-venv"
+          "$RUNNER_TEMP/bol-venv/bin/python" -m pip install --quiet cryptography torch transformers pillow pillow-heif sentencepiece accelerate
+      - name: Decrypt and verify three private images
+        env:
+          BOL_VISION_AES_KEY: ${{ secrets.BOL_VISION_AES_KEY }}
+          BOL_ENCRYPTED_FIXTURE_URL: ${{ secrets.BOL_ENCRYPTED_FIXTURE_URL }}
+          BOL_3_GROUND_TRUTH_JSON: ${{ secrets.BOL_3_GROUND_TRUTH_JSON }}
+        run: "$RUNNER_TEMP/bol-venv/bin/python" benchmark/prepare.py
+      - name: Apple Vision V9 with V8 fallback
+        run: |
+          cp benchmark/private-three-bol-vision.swift "$RUNNER_TEMP/main.swift"
+          swiftc -o "$RUNNER_TEMP/vision-compare" "$RUNNER_TEMP/main.swift" benchmark/BOLAddressParserV8.swift benchmark/BOLParserV9.swift
+          "$RUNNER_TEMP/vision-compare" "$RUNNER_TEMP/bol-private" "$RUNNER_TEMP/vision-predictions.json"
+      - name: SmolVLM and agreement-only hybrid
+        env:
+          HF_HUB_DISABLE_TELEMETRY: "1"
+          TOKENIZERS_PARALLELISM: "false"
+        run: |
+          "$RUNNER_TEMP/bol-venv/bin/python" benchmark/run-private-three-bol-comparison.py "$RUNNER_TEMP/bol-private" "$RUNNER_TEMP/vision-predictions.json" "$RUNNER_TEMP/predictions.json"
+      - name: Print aggregate accuracy only
+        env:
+          BOL_3_GROUND_TRUTH_JSON: ${{ secrets.BOL_3_GROUND_TRUTH_JSON }}
+        run: |
+          umask 077
+          "$RUNNER_TEMP/bol-venv/bin/python" -c 'import os,pathlib; pathlib.Path(os.environ["RUNNER_TEMP"],"ground-truth.json").write_text(os.environ["BOL_3_GROUND_TRUTH_JSON"])'
+          "$RUNNER_TEMP/bol-venv/bin/python" benchmark/compare-private-three-bol.py --ground-truth "$RUNNER_TEMP/ground-truth.json" --predictions "$RUNNER_TEMP/predictions.json"
+      - name: Remove private data
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/bol-private" "$RUNNER_TEMP/bol-venv" "$RUNNER_TEMP/main.swift" "$RUNNER_TEMP/vision-compare" "$RUNNER_TEMP/vision-predictions.json" "$RUNNER_TEMP/predictions.json" "$RUNNER_TEMP/ground-truth.json"

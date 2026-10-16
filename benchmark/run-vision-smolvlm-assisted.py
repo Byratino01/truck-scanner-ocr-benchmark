@@ -40,13 +40,57 @@ def candidates(lines, baseline):
             found.setdefault(key, normalized)
     return {'C%02d' % (i + 1): item for i, item in enumerate(found.values())}
 
-def parse_selection(raw, choices):
-    raw = raw.strip()
-    if raw.startswith('```'):
-        raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw, flags=re.I)
+def parse_role_response(raw, choices):
+    """Strictly validate two-line role output; never log raw model output.
+
+    Also accept valid legacy JSON to preserve backwards compatibility.
+    Returns (selections, response-category). Unknown IDs invalidate the whole result.
+    """
+    empty = {'pickup': None, 'delivery': None}
+    cleaned = raw.strip()
+    if cleaned.startswith('```'):
+        cleaned = re.sub(r'^```(?:json|text)?\s*|\s*```$', '', cleaned, flags=re.I).strip()
     try:
-        obj = json.loads(raw)
-    except (ValueError, TypeError):
+        obj = json.loads(cleaned)
+    except (TypeError, ValueError):
+        obj = None
+    if isinstance(obj, dict) and set(obj) == {'pickup', 'delivery'}:
+        selected = {}
+        for role in ('pickup', 'delivery'):
+            value = obj[role]
+            if value is not None and (not isinstance(value, str) or value not in choices):
+                return empty, 'invalid_candidate_id'
+            selected[role] = value
+        return selected, 'abstained' if all(v is None for v in selected.values()) else 'valid_selection'
+    # Constrained fallback: exactly two full lines, with no uncontrolled free text.
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    if len(lines) != 2:
+        return empty, 'invalid_format'
+    found = {}
+    for line in lines:
+        match = re.fullmatch(r'(PICKUP|DELIVERY)\s*[:=]\s*(C[0-9]{2}|NONE)', line, flags=re.I)
+        if match is None:
+            return empty, 'invalid_format'
+        role = match.group(1).lower()
+        if role in found:
+            return empty, 'invalid_format'
+        value = match.group(2).upper()
+        if value != 'NONE' and value not in choices:
+            return empty, 'invalid_candidate_id'
+        found[role] = None if value == 'NONE' else value
+    if set(found) != {'pickup', 'delivery'}:
+        return empty, 'invalid_format'
+    return found, 'abstained' if all(v is None for v in found.values()) else 'valid_selection'
+
+
+def parse_selection(raw, choices):
+    """Legacy helper retained for existing synthetic tests and callers."""
+    cleaned = raw.strip()
+    if cleaned.startswith('```'):
+        cleaned = re.sub(r'^```(?:json|text)?\s*|\s*```$', '', cleaned, flags=re.I).strip()
+    try:
+        obj = json.loads(cleaned)
+    except (TypeError, ValueError):
         return {'pickup': None, 'delivery': None}
     if not isinstance(obj, dict) or set(obj) != {'pickup', 'delivery'}:
         return {'pickup': None, 'delivery': None}
@@ -55,23 +99,25 @@ def parse_selection(raw, choices):
 
 
 def selection_diagnostics(raw, choices):
-    """Classify model output without displaying its text or any OCR candidates."""
-    response = raw.strip()
-    if response.startswith('```'):
-        response = re.sub(r'^```(?:json)?\s*|\s*```$', '', response, flags=re.I)
-    try:
-        parsed = json.loads(response)
-    except (ValueError, TypeError):
-        return 'invalid_json'
-    if not isinstance(parsed, dict) or set(parsed) != {'pickup', 'delivery'}:
-        return 'invalid_schema'
-    for role in ('pickup', 'delivery'):
-        value = parsed[role]
-        if value is not None and (not isinstance(value, str) or value not in choices):
-            return 'invalid_candidate_id'
-    if all(parsed[role] is None for role in ('pickup', 'delivery')):
-        return 'abstained'
-    return 'valid_selection'
+    return parse_role_response(raw, choices)[1]
+
+
+def candidate_context(lines, options, limit=16):
+    """Short neighborhood around candidate evidence; do not log or persist text."""
+    texts = [item.get('text', '') for item in lines if isinstance(item, dict)]
+    texts = [t for t in texts if isinstance(t, str)]
+    anchors = []
+    for index, text in enumerate(texts):
+        if any(part in text.upper() for part in ('SHIP', 'CONSIGN', 'DELIVER', 'PICK', 'FROM', 'TO:')):
+            anchors.append(index)
+        if any(loc['zip'] in text for loc in options.values()):
+            anchors.append(index)
+    chosen = set()
+    for index in anchors:
+        for j in range(max(0,index-2),min(len(texts),index+3)):
+            chosen.add(j)
+        if len(chosen) >= limit: break
+    return [{'line': i+1, 'text': texts[i][:160]} for i in sorted(chosen)[:limit]]
 
 def merge_roles(baseline, vlm):
     """Retain a baseline on abstention, fill missing roles, withhold conflicts."""
@@ -103,7 +149,7 @@ def main():
     model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, trust_remote_code=False).eval()
     results = {}
     totals = {'documents': 0, 'candidates': 0, 'no_candidates': 0,
-              'invalid_json': 0, 'invalid_schema': 0, 'invalid_candidate_id': 0,
+              'invalid_format': 0, 'invalid_candidate_id': 0,
               'abstained': 0, 'valid_selection': 0, 'selected_roles': 0,
               'conflicts': 0, 'filled_roles': 0}
     for doc in score.IDS:
@@ -123,14 +169,16 @@ def main():
         category = 'no_candidates'
         if options:
             # Ask the model only to classify candidate IDs. It cannot invent city, state, or ZIP.
-            instruction = ('This is a Bill of Lading. Choose which candidate ID is the actual '
-                           'PICKUP / shipper / ship-from and which is DELIVERY / consignee / ship-to. '
-                           'Do not use billing, carrier, notify party, or corporate headquarters addresses. '
-                           'If uncertain use null. Respond with only JSON such as '
-                           '{"pickup":"C01","delivery":"C02"}; values must be listed IDs or null.\n'
-                           'Candidates:\n' + json.dumps(options, separators=(',', ':')) + '\n'
-                           'Apple Vision OCR lines (top to bottom; coordinates normalized):\n' +
-                           json.dumps(row['ocr_lines'][:200], separators=(',', ':')))
+            instruction = ('Classify the pickup and delivery on this Bill of Lading. '
+                           'Use ONLY the candidate IDs shown below. Never invent an address. '
+                           'SHIPPER / FROM means PICKUP; CONSIGNEE / SHIP TO means DELIVERY. '
+                           'Ignore billing, carrier and headquarters. If unsure use NONE. '
+                           'Return EXACTLY these two lines (no JSON, explanation, or markdown):\n'
+                           'PICKUP=C01\nDELIVERY=C02\n'
+                           'Replace an unknown role with NONE. Candidate IDs:\n' +
+                           json.dumps(options, separators=(',', ':')) + '\n'
+                           'Nearby OCR context:\n' +
+                           json.dumps(candidate_context(row['ocr_lines'], options), separators=(',', ':')))
             with Image.open(match[0]) as source:
                 pic = ImageOps.exif_transpose(source).convert('RGB')
                 # Vision .right means clockwise; Pillow's positive rotation is counterclockwise.
@@ -142,8 +190,7 @@ def main():
                 with torch.inference_mode():
                     output = model.generate(**inputs, max_new_tokens=100, do_sample=False)
                 answer = processor.decode(output[0, inputs['input_ids'].shape[-1]:], skip_special_tokens=True)
-                category = selection_diagnostics(answer, options)
-                selected = parse_selection(answer, options)
+                selected, category = parse_role_response(answer, options)
         vlm = {role: options.get(selected[role]) for role in ('pickup', 'delivery')}
         # Assisted hybrid: prefer a non-conflicting V9 result; take VLM result only when
         # V9 is empty. Conflicts are withheld for review rather than replaced.

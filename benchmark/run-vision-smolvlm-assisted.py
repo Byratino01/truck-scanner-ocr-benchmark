@@ -53,6 +53,26 @@ def parse_selection(raw, choices):
     return {role: (obj[role] if isinstance(obj[role], str) and obj[role] in choices else None)
             for role in ('pickup', 'delivery')}
 
+
+def selection_diagnostics(raw, choices):
+    """Classify model output without displaying its text or any OCR candidates."""
+    response = raw.strip()
+    if response.startswith('```'):
+        response = re.sub(r'^```(?:json)?\s*|\s*```$', '', response, flags=re.I)
+    try:
+        parsed = json.loads(response)
+    except (ValueError, TypeError):
+        return 'invalid_json'
+    if not isinstance(parsed, dict) or set(parsed) != {'pickup', 'delivery'}:
+        return 'invalid_schema'
+    for role in ('pickup', 'delivery'):
+        value = parsed[role]
+        if value is not None and (not isinstance(value, str) or value not in choices):
+            return 'invalid_candidate_id'
+    if all(parsed[role] is None for role in ('pickup', 'delivery')):
+        return 'abstained'
+    return 'valid_selection'
+
 def merge_roles(baseline, vlm):
     """Retain a baseline on abstention, fill missing roles, withhold conflicts."""
     assisted = {}
@@ -82,6 +102,10 @@ def main():
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=False)
     model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, trust_remote_code=False).eval()
     results = {}
+    totals = {'documents': 0, 'candidates': 0, 'no_candidates': 0,
+              'invalid_json': 0, 'invalid_schema': 0, 'invalid_candidate_id': 0,
+              'abstained': 0, 'valid_selection': 0, 'selected_roles': 0,
+              'conflicts': 0, 'filled_roles': 0}
     for doc in score.IDS:
         row = vision[doc]
         if set(row) != {'apple_vision', 'ocr_lines', 'ocr_rotation_degrees'} or not isinstance(row['ocr_lines'], list):
@@ -96,6 +120,7 @@ def main():
         if len(match) != 1:
             raise ValueError('Missing or duplicate private document')
         selected = {'pickup': None, 'delivery': None}
+        category = 'no_candidates'
         if options:
             # Ask the model only to classify candidate IDs. It cannot invent city, state, or ZIP.
             instruction = ('This is a Bill of Lading. Choose which candidate ID is the actual '
@@ -117,15 +142,32 @@ def main():
                 with torch.inference_mode():
                     output = model.generate(**inputs, max_new_tokens=100, do_sample=False)
                 answer = processor.decode(output[0, inputs['input_ids'].shape[-1]:], skip_special_tokens=True)
+                category = selection_diagnostics(answer, options)
                 selected = parse_selection(answer, options)
         vlm = {role: options.get(selected[role]) for role in ('pickup', 'delivery')}
         # Assisted hybrid: prefer a non-conflicting V9 result; take VLM result only when
         # V9 is empty. Conflicts are withheld for review rather than replaced.
         assisted = merge_roles(baseline, vlm)
+        conflicts = sum(baseline[role] is not None and vlm[role] is not None
+                        and baseline[role] != vlm[role] for role in ('pickup', 'delivery'))
+        filled = sum(baseline[role] is None and vlm[role] is not None
+                     for role in ('pickup', 'delivery'))
+        chosen = sum(selected[role] is not None for role in ('pickup', 'delivery'))
+        totals['documents'] += 1
+        totals['candidates'] += len(options)
+        totals[category] += 1
+        totals['selected_roles'] += chosen
+        totals['conflicts'] += conflicts
+        totals['filled_roles'] += filled
+        print(doc + ': candidates=' + str(len(options)) +
+              ' response_category=' + category + ' selected_roles=' + str(chosen) +
+              ' conflicts=' + str(conflicts) + ' filled_roles=' + str(filled) +
+              '; document contents suppressed')
         results[doc] = {'apple_vision': baseline, 'smolvlm': vlm, 'hybrid': assisted}
         print(doc + ': private assisted comparison complete; address content suppressed')
     a.output.write_text(json.dumps(results))
     a.output.chmod(0o600)
+    print('SAFE_DIAGNOSTIC_TOTALS: ' + ' '.join(k + '=' + str(v) for k, v in totals.items()))
     print('VISION_SMOLVLM_ASSISTED_READY: 3/3; roles and addresses suppressed')
 
 if __name__ == '__main__':

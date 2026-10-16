@@ -132,6 +132,63 @@ func runSyntheticTests() {
     check(BOLParserV9.consolidateRotations(distinctZipDocuments).pickup == nil,
           "ZIP conflicts cannot be accepted by majority vote")
 
+
+    // Diagnosis-only: distinguish absent OCR evidence from parser rejection.
+    let noEvidence = OCRDocument(file: "synthetic-no-ocr-evidence", lines: [
+        line("DOCUMENT HEADER", 0.20, 0.90), line("REFERENCE NUMBER", 0.20, 0.82)
+    ])
+    let noEvidenceReport = BOLParserV9.diagnosticSummary(noEvidence)
+    check(noEvidenceReport.pickupOrigin == "none" &&
+          noEvidenceReport.deliveryOrigin == "none",
+          "missing OCR role/address evidence classified as no candidate")
+
+    let unownedLocation = OCRDocument(file: "synthetic-unowned-location", lines: [
+        line("DOCUMENT HEADER", 0.20, 0.90),
+        line("EXAMPLE CITY, CO 12345", 0.20, 0.82)
+    ])
+    let unownedReport = BOLParserV9.diagnosticSummary(unownedLocation)
+    check(unownedReport.pickupOrigin == "none" &&
+          unownedReport.deliveryOrigin == "none",
+          "legible location without trusted heading not assigned to a role")
+
+    let unownedParsed = BOLParserV9.parse(unownedLocation)
+    check(unownedParsed.pickup == nil && unownedParsed.delivery == nil,
+          "unowned OCR location remains unassigned")
+
+    let billingReport = BOLParserV9.diagnosticSummary(billing)
+    check(billingReport.pickupOrigin == "none" &&
+          billingReport.deliveryOrigin == "none",
+          "billing-only role evidence not treated as valid candidate")
+
+    // Inspect rejection reasons without publishing evidence or changing selection.
+    let candidateAccepted = AddressSelection(street: nil, cityStateZIP: "EXAMPLE CITY, CO 12345",
+                                             status: "review", evidence: "SHIPPER")
+    let candidateBilling = AddressSelection(street: nil, cityStateZIP: "EXAMPLE CITY, CO 12345",
+                                            status: "review", evidence: "BILL TO")
+    let candidateNoAnchor = AddressSelection(street: nil, cityStateZIP: "EXAMPLE CITY, CO 12345",
+                                             status: "review", evidence: nil)
+    let candidateWrongRole = AddressSelection(street: nil, cityStateZIP: "EXAMPLE CITY, CO 12345",
+                                              status: "review", evidence: "CONSIGNEE")
+    let candidateBadLocation = AddressSelection(street: nil, cityStateZIP: "NOT A LOCATION",
+                                                status: "review", evidence: "SHIPPER")
+    let candidateUnreviewed = AddressSelection(street: nil, cityStateZIP: "EXAMPLE CITY, CO 12345",
+                                               status: "missing", evidence: "SHIPPER")
+
+    check(BOLParserV9.fallbackRejectionCode(candidateAccepted, role: 0) == "accepted",
+          "valid fallback candidate diagnostic")
+    check(BOLParserV9.fallbackRejectionCode(candidateBilling, role: 0) == "billing-anchor",
+          "billing fallback rejection diagnostic")
+    check(BOLParserV9.fallbackRejectionCode(candidateNoAnchor, role: 0) == "missing-anchor",
+          "missing anchor rejection diagnostic")
+    check(BOLParserV9.fallbackRejectionCode(candidateWrongRole, role: 0) == "untrusted-anchor",
+          "wrong-role anchor rejection diagnostic")
+    check(BOLParserV9.fallbackRejectionCode(candidateBadLocation, role: 0) == "location-format",
+          "malformed city/state/ZIP rejection diagnostic")
+    check(BOLParserV9.fallbackRejectionCode(candidateUnreviewed, role: 0) == "v8-status-not-review",
+          "unreviewed baseline rejection diagnostic")
+    check(BOLParserV9.fallbackRejectionCode(candidateAccepted, role: 2) == "invalid-role",
+          "invalid role rejection diagnostic")
+
     print("BOLParserV9 synthetic diagnostics: passed")
 }
 
